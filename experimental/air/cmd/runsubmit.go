@@ -163,13 +163,13 @@ func submitWorkload(ctx context.Context, w *databricks.WorkspaceClient, cfg *run
 		return 0, "", err
 	}
 
-	// Package and upload the code snapshot, if any. The resulting paths ride on the
-	// ai_runtime_task; a run with no code_source leaves them empty. Snapshot is the
-	// only code_source type; guard against a nil block so snapshotCodeSource never
-	// dereferences a missing snapshot.
+	// Package and upload the code snapshot, if any, via the DABs aicode mutator so
+	// snapshotting is shared with the (eventual) DABs submission path. The resulting
+	// code_source_path rides on the ai_runtime_task; a run with no code_source leaves
+	// it empty. Snapshot is the only code_source type; guard against a nil block.
 	var snap snapshotResult
 	if cfg.CodeSource != nil && cfg.CodeSource.Snapshot != nil {
-		snap, err = snapshotCodeSource(ctx, w, cfg.CodeSource.Snapshot, configPath, base, funcDir)
+		snap, err = snapshotViaAicode(ctx, w, cfg.CodeSource.Snapshot, configPath)
 		if err != nil {
 			return 0, "", err
 		}

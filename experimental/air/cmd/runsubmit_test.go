@@ -2,6 +2,7 @@ package aircmd
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -193,11 +194,47 @@ code_source:
 	require.NoError(t, err)
 
 	at := got.Tasks[0].AiRuntimeTask
-	// The tarball path is under the user's repo_snapshots dir. git_state_path /
-	// git_diff_path are not asserted: the typed jobs.AiRuntimeTask has no such fields
-	// (see the TEMP note in buildSubmitPayload), so they aren't sent. The git_state
-	// sidecar file is still uploaded next to the tarball — covered by TestRunSnapshot.
+	// The aicode mutator uploads the git-archived commit to the user's repo_snapshots
+	// dir and rewrites code_source_path to it.
 	assert.Contains(t, at.CodeSourcePath, "/.air/repo_snapshots/"+filepath.Base(repo)+"/")
+	assert.True(t, strings.HasSuffix(at.CodeSourcePath, ".tar.gz"), at.CodeSourcePath)
+}
+
+// A plain working-tree code_source (no git ref) is packaged via the aicode mutator
+// and its remote path attached to the task.
+func TestSubmitWorkloadWithWorkingTreeCodeSource(t *testing.T) {
+	server := testserver.New(t)
+	t.Cleanup(server.Close)
+
+	var got jobs.SubmitRun
+	server.Handle("POST", "/api/2.2/jobs/runs/submit", func(req testserver.Request) any {
+		require.NoError(t, json.Unmarshal(req.Body, &got))
+		return jobs.SubmitRunResponse{RunId: 555}
+	})
+	testserver.AddDefaultHandlers(server)
+	w, err := databricks.NewWorkspaceClient(&databricks.Config{Host: server.URL, Token: "token"})
+	require.NoError(t, err)
+
+	// A non-git directory: packaging is plain-tar of the working tree.
+	code := filepath.Join(t.TempDir(), "src")
+	require.NoError(t, os.MkdirAll(code, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(code, "train.py"), []byte("print()"), 0o644))
+
+	cfg := minimalConfig + `
+code_source:
+  type: snapshot
+  snapshot:
+    root_path: ` + code + `
+`
+	cfgPath := writeConfigFile(t, "run.yaml", cfg)
+	loaded, err := loadRunConfig(cfgPath)
+	require.NoError(t, err)
+
+	_, _, err = submitWorkload(t.Context(), w, loaded, cfgPath, "idem")
+	require.NoError(t, err)
+
+	at := got.Tasks[0].AiRuntimeTask
+	assert.Contains(t, at.CodeSourcePath, "/.air/repo_snapshots/src/")
 	assert.True(t, strings.HasSuffix(at.CodeSourcePath, ".tar.gz"), at.CodeSourcePath)
 }
 
